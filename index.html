@@ -123,6 +123,23 @@ tr.off td{color:var(--soft);text-decoration:line-through}
 @media (prefers-reduced-motion:no-preference){.sheet{animation:rise .18s ease-out}@keyframes rise{from{transform:translateY(24px)}}}
 .sheet h2{font:700 18px/1.4 var(--display);margin-bottom:10px}
 .toast{position:fixed;z-index:30;inset-inline:16px;inset-block-end:calc(70px + env(safe-area-inset-bottom,0px));max-width:560px;margin:0 auto;padding:12px 14px;border-radius:8px;background:var(--primary);color:var(--on-primary);font-size:15px}
+.hero{background:var(--primary);color:var(--on-primary);border-radius:16px;padding:18px 18px 14px;margin-bottom:12px}
+.hero p{margin:0;font-size:14px;opacity:.85}
+.hero .hero-sum{font:700 clamp(30px,9vw,40px)/1.25 var(--display);opacity:1;margin-block:4px 12px;font-variant-numeric:tabular-nums}
+.hero .hero-sum small{font:500 15px var(--font)}
+.hero-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:8px;border-top:1px solid color-mix(in srgb,var(--on-primary) 25%,transparent);padding-top:10px}
+.hero-row span{display:block;font-size:12.5px;opacity:.8}
+.hero-row b{font-size:17px}
+.late-card{display:flex;width:100%;text-align:start;gap:10px;padding:13px 15px;border-radius:12px;border:0;background:var(--debt-bg);color:var(--debt);cursor:pointer;margin-bottom:12px;border-inline-start:5px solid var(--debt)}
+.late-card.none{background:var(--paid-bg);color:var(--paid);border-color:var(--paid)}
+.late-card b{display:block;font-size:16px}
+.late-card small{display:block;font-size:13.5px;margin-top:2px}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:6px}
+.tile{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:100px;border-radius:14px;border:1px solid var(--rule);background:var(--paper);text-decoration:none;font-weight:700;font-size:16px;color:var(--ink)}
+.tile svg{width:30px;height:30px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.tile.main{background:var(--primary);color:var(--on-primary);border-color:var(--primary)}
+.tile.green{background:var(--paid);color:var(--sheet);border-color:var(--paid)}
+.btn{border-radius:10px}
 .gate{max-width:440px;margin:0 auto;min-height:100vh;padding:34px 20px;display:grid;align-content:start;gap:14px}
 .gate h1{font:700 28px/1.3 var(--display)}
 .gate h1 span{display:inline-block;border-bottom:4px double var(--ink);padding-bottom:3px}
