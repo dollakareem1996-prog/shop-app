@@ -58,7 +58,10 @@ var Core = (function () {
     } else {
       if (!rec.customerId) throw new Error('البيع بالأقساط يحتاج إلى زبون.');
       if (type === 'opening') {
-        rec.schedule = [{ due: p.date, amount: total }];
+        // الدين القديم: مبلغ واحد، أو أقساط متبقية تبدأ من تاريخ القسط القادم
+        var om = int(p.months);
+        if (om >= 1 && om <= 60 && isDate(p.firstDue)) { rec.months = om; rec.firstDue = String(p.firstDue); rec.schedule = buildSchedule(total, om, rec.firstDue); }
+        else rec.schedule = [{ due: p.date, amount: total }];
       } else {
         rec.down = int(p.down);
         rec.months = int(p.months);

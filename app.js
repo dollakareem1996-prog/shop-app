@@ -762,6 +762,128 @@
     Object.keys(r.bySeller).forEach(function (k) { sellers.push([k, r.bySeller[k].count, r.bySeller[k].sales]); });
     return xlsxBytes([{ name: 'الملخص', rows: summary }, { name: 'المبيعات', rows: sales }, { name: 'التسديدات', rows: pays }, { name: 'الزبائن والأرصدة', rows: custs }, { name: 'جدول الأقساط', rows: sched }, { name: 'الأصناف والمخزون', rows: items }, { name: 'البائعون', rows: sellers }]);
   }
+  /* ---------- استيراد الديون القديمة ---------- */
+  var IMPORT_COLS = ['اسم الزبون', 'الهاتف', 'العنوان', 'اسم الكفيل', 'هاتف الكفيل', 'الدين المتبقي', 'عدد الأشهر المتبقية', 'تاريخ القسط القادم', 'ملاحظة'];
+  function inflateRaw(bytes) {
+    if (typeof DecompressionStream !== 'function') return Promise.reject(new Error('هذا المتصفح قديم ولا يقرأ ملفات Excel. حدّث Chrome أو ارفع الملف بصيغة CSV.'));
+    return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer().then(function (b) { return new Uint8Array(b); });
+  }
+  function unzip(buf) {
+    var d = new DataView(buf.buffer, buf.byteOffset, buf.byteLength), e = buf.length - 22;
+    while (e >= 0 && d.getUint32(e, true) !== 0x06054b50) e--;
+    if (e < 0) return Promise.reject(new Error('الملف ليس ملف Excel صالحًا.'));
+    var n = d.getUint16(e + 10, true), p = d.getUint32(e + 16, true), out = {}, jobs = [];
+    for (var i = 0; i < n; i++) {
+      var method = d.getUint16(p + 10, true), csize = d.getUint32(p + 20, true), nlen = d.getUint16(p + 28, true), xlen = d.getUint16(p + 30, true), clen = d.getUint16(p + 32, true), loc = d.getUint32(p + 42, true);
+      var name = new TextDecoder().decode(buf.subarray(p + 46, p + 46 + nlen));
+      var start = loc + 30 + d.getUint16(loc + 26, true) + d.getUint16(loc + 28, true), data = buf.subarray(start, start + csize);
+      (function (name, method, data) { jobs.push((method === 0 ? Promise.resolve(data) : inflateRaw(data)).then(function (b) { out[name] = new TextDecoder().decode(b); })); })(name, method, data);
+      p += 46 + nlen + xlen + clen;
+    }
+    return Promise.all(jobs).then(function () { return out; });
+  }
+  function serialDate(n) { var dt = new Date(Math.round((n - 25569) * 86400000)); return dt.getUTCFullYear() + '/' + ('0' + (dt.getUTCMonth() + 1)).slice(-2) + '/' + ('0' + dt.getUTCDate()).slice(-2); }
+  function readXlsxRows(files) {
+    var dp = new DOMParser(), shared = [];
+    if (files['xl/sharedStrings.xml']) Array.prototype.forEach.call(dp.parseFromString(files['xl/sharedStrings.xml'], 'application/xml').getElementsByTagName('si'), function (si) {
+      shared.push(Array.prototype.map.call(si.getElementsByTagName('t'), function (t) { return t.textContent; }).join(''));
+    });
+    var wb = dp.parseFromString(files['xl/workbook.xml'] || '', 'application/xml'), first = wb.getElementsByTagName('sheet')[0], path = 'xl/worksheets/sheet1.xml';
+    if (first && files['xl/_rels/workbook.xml.rels']) {
+      var rid = first.getAttribute('r:id') || first.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
+      Array.prototype.forEach.call(dp.parseFromString(files['xl/_rels/workbook.xml.rels'], 'application/xml').getElementsByTagName('Relationship'), function (r) { if (r.getAttribute('Id') === rid) path = 'xl/' + r.getAttribute('Target').replace(/^\/?xl\//, ''); });
+    }
+    if (!files[path]) throw new Error('لم أجد الورقة الأولى في الملف.');
+    var dateStyles = {};
+    if (files['xl/styles.xml']) {
+      var sx = dp.parseFromString(files['xl/styles.xml'], 'application/xml'), cx = sx.getElementsByTagName('cellXfs')[0];
+      if (cx) Array.prototype.forEach.call(cx.getElementsByTagName('xf'), function (xf, i) { var f = +xf.getAttribute('numFmtId'); if ((f >= 14 && f <= 22) || (f >= 164 && /[dy]/i.test((sx.querySelector('numFmt[numFmtId="' + f + '"]') || { getAttribute: function () { return ''; } }).getAttribute('formatCode')))) dateStyles[i] = true; });
+    }
+    var rows = [];
+    Array.prototype.forEach.call(dp.parseFromString(files[path], 'application/xml').getElementsByTagName('row'), function (row) {
+      var r = [];
+      Array.prototype.forEach.call(row.getElementsByTagName('c'), function (c) {
+        var ref = c.getAttribute('r') || '', col = 0, m = /^([A-Z]+)/.exec(ref);
+        if (m) for (var k = 0; k < m[1].length; k++) col = col * 26 + m[1].charCodeAt(k) - 64; else col = r.length + 1;
+        var t = c.getAttribute('t'), v = c.getElementsByTagName('v')[0], val = '';
+        if (t === 's') val = shared[+(v && v.textContent)] || '';
+        else if (t === 'inlineStr') val = Array.prototype.map.call(c.getElementsByTagName('t'), function (x) { return x.textContent; }).join('');
+        else if (v) { val = Number(v.textContent); if (dateStyles[+c.getAttribute('s')]) val = serialDate(val); }
+        r[col - 1] = val;
+      });
+      rows.push(r);
+    });
+    return rows;
+  }
+  function readCsvRows(text) {
+    var rows = [], row = [], cur = '', q = false;
+    text = text.replace(/^\uFEFF/, '');
+    for (var i = 0; i < text.length; i++) {
+      var ch = text[i];
+      if (q) { if (ch === '"' && text[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') q = false; else cur += ch; }
+      else if (ch === '"') q = true; else if (ch === ',' || ch === ';') { row.push(cur); cur = ''; } else if (ch === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; } else if (ch !== '\r') cur += ch;
+    }
+    if (cur || row.length) { row.push(cur); rows.push(row); }
+    return rows;
+  }
+  function importDate(v) {
+    if (v === '' || v === undefined || v === null) return '';
+    if (typeof v === 'number') return v > 30000 && v < 80000 ? serialDate(v) : null;
+    var s = latin(v).trim().replace(/[-.]/g, '/'), m = /^(\d{4})\/(\d{1,2})\/(\d{1,2})$/.exec(s), m2 = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
+    if (m) s = m[1] + '/' + ('0' + m[2]).slice(-2) + '/' + ('0' + m[3]).slice(-2);
+    else if (m2) s = m2[3] + '/' + ('0' + m2[2]).slice(-2) + '/' + ('0' + m2[1]).slice(-2);
+    return Core.isDate(s) ? s : null;
+  }
+  function importPhone(v) {
+    var s = latin(v).replace(/[^\d+]/g, '');
+    if (/^7\d{9}$/.test(s)) s = '0' + s;
+    return s && !/^\+?\d{7,15}$/.test(s) ? null : s;
+  }
+  function buildImport(rows) {
+    var head = rows.findIndex(function (r) { return r && String(r[0] || '').indexOf('اسم الزبون') >= 0; });
+    var body = rows.slice(head >= 0 ? head + 1 : 0).filter(function (r) { return r && r.some(function (x) { return String(x === undefined ? '' : x).trim() !== ''; }); });
+    var byName = {}, done = {}, seen = {};
+    activeCustomers().forEach(function (c) { byName[c.name] = c; });
+    Core.values(S.view.sales).forEach(function (s) { if (s.type === 'opening' && !s.cancelled && s.lines[0] && /استيراد/.test(s.lines[0].name)) done[s.customerId + '|' + s.total] = true; });
+    return body.map(function (r, i) {
+      var cell = function (k) { return r[k] === undefined || r[k] === null ? '' : r[k]; };
+      var o = { line: i + 1, name: String(cell(0)).trim().slice(0, 60), phone: importPhone(cell(1)), address: String(cell(2)).trim().slice(0, 120), gName: String(cell(3)).trim().slice(0, 60), gPhone: importPhone(cell(4)), amount: typeof cell(5) === 'number' ? Math.round(cell(5)) : parseAmount(cell(5)), months: cell(6) === '' ? 0 : (typeof cell(6) === 'number' ? Math.round(cell(6)) : parseAmount(cell(6))), firstDue: importDate(cell(7)), note: String(cell(8)).trim().slice(0, 80) };
+      if (!o.name) o.error = 'اسم الزبون فارغ';
+      else if (!(o.amount > 0)) o.error = 'الدين المتبقي غير صحيح';
+      else if (o.phone === null) o.error = 'رقم الهاتف غير صحيح';
+      else if (o.gPhone === null) o.error = 'هاتف الكفيل غير صحيح';
+      else if (o.months === null || o.months < 0 || o.months > 60) o.error = 'عدد الأشهر بين 1 و60';
+      else if (o.firstDue === null) o.error = 'تاريخ القسط القادم غير صحيح';
+      else if (o.months > 0 && !o.firstDue) o.error = 'اكتب تاريخ القسط القادم مع عدد الأشهر';
+      else if (seen[o.name]) o.error = 'الاسم مكرر في الملف';
+      seen[o.name] = true;
+      var ex = byName[o.name];
+      if (ex) { o.existingId = ex.id; if (done[ex.id + '|' + o.amount]) o.skip = 'استُورد هذا الدين سابقًا'; }
+      if (!o.firstDue) o.months = 0;
+      return o;
+    });
+  }
+  function sheetImport(st) {
+    st.focus = false;
+    var ok = st.rows.filter(function (r) { return !r.error && !r.skip; }), bad = st.rows.filter(function (r) { return r.error; }), total = ok.reduce(function (s, r) { return s + r.amount; }, 0);
+    var h = '<h2>معاينة الاستيراد</h2><p style="margin-bottom:8px">سيُستورد <b>' + ok.length + '</b> دين بمجموع ' + money(total) + (bad.length ? '، و<b style="color:var(--debt)">' + bad.length + '</b> صف فيه خطأ ولن يُستورد' : '') + '.</p>';
+    h += '<div class="scroll" style="max-height:48vh;overflow:auto"><table><thead><tr><th>الزبون</th><th class="n">الدين</th><th>التقسيط</th><th>الحالة</th></tr></thead><tbody>' + st.rows.map(function (r) {
+      return '<tr><td>' + esc(r.name || 'صف ' + r.line) + (r.gName ? '<small style="display:block;color:var(--soft)">الكفيل: ' + esc(r.gName) + '</small>' : '') + '</td><td class="n">' + (r.amount > 0 ? fmt(r.amount) : '') + '</td><td>' + (r.months ? r.months + ' شهر من <span class="num">' + esc(r.firstDue) + '</span>' : 'دفعة واحدة') + '</td><td>' +
+        (r.error ? '<span class="tag bad">' + esc(r.error) + '</span>' : r.skip ? '<span class="tag">' + esc(r.skip) + '</span>' : r.existingId ? '<span class="tag warn">يُضاف لزبون موجود</span>' : '<span class="tag good">زبون جديد</span>') + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+    return h + '<div class="row" style="margin-top:12px">' + (ok.length ? '<button class="btn primary" data-act="import-confirm">استيراد ' + ok.length + ' دين</button>' : '') + closeBtn('إلغاء') + '</div>' + (bad.length ? '<p class="hint" style="margin-top:8px">صحح الصفوف الحمراء في الملف وارفعه مرة أخرى؛ الديون المستوردة الآن لن تتكرر.</p>' : '');
+  }
+  function onImportFile(file) {
+    if (!file) return;
+    var isCsv = /\.csv$/i.test(file.name);
+    file.arrayBuffer().then(function (buf) {
+      return isCsv ? readCsvRows(new TextDecoder().decode(buf)) : unzip(new Uint8Array(buf)).then(readXlsxRows);
+    }).then(function (rows) {
+      var list = buildImport(rows);
+      if (!list.length) { toast('لم أجد أي صف مملوء في الورقة الأولى.'); return; }
+      S.sheet = { kind: 'import', rows: list, n: Date.now() }; render();
+    }).catch(function (e) { toast('تعذر قراءة الملف: ' + e.message); });
+  }
   function printHtml(html) { $('print').innerHTML = html; applyPaper(); window.print(); }
 
   /* ---------- النوافذ ---------- */
@@ -771,7 +893,7 @@
     var key = s.kind + (s.saleId || s.paymentId || s.customerId || s.itemId || s.userId || '') + (s.n || 0);
     if (!o.hidden && o.dataset.key === key && s.keep) return;
     o.dataset.key = key; o.hidden = false; s.keep = true;
-    var fn = { invoice: sheetInvoice, receipt: sheetPayment, statement: sheetStatement, customer: sheetCustomer, payment: sheetNewPayment, item: sheetItem, stock: sheetStock, opening: sheetOpening, user: sheetUser, password: sheetPassword, rejected: sheetRejected }[s.kind];
+    var fn = { import: sheetImport, invoice: sheetInvoice, receipt: sheetPayment, statement: sheetStatement, customer: sheetCustomer, payment: sheetNewPayment, item: sheetItem, stock: sheetStock, opening: sheetOpening, user: sheetUser, password: sheetPassword, rejected: sheetRejected }[s.kind];
     o.innerHTML = '<div class="sheet" role="dialog" aria-modal="true">' + fn(s) + '</div>';
     var first = o.querySelector('input:not([readonly]):not([type=checkbox])'); if (first && s.focus !== false) first.focus();
     itemPreview();
@@ -941,6 +1063,7 @@
     if (owner()) {
       var tg = s.telegram || {}, bk = s.backup || {};
       h += '<section class="section"><h2>المستخدمون والصلاحيات</h2><p class="hint">أضف البائعين وحدد ما يراه كل منهم.</p><div class="row" style="margin-top:8px"><a class="btn quiet small" href="#users">إدارة المستخدمين</a><button class="btn quiet small" data-act="copy-invite">نسخ رابط التطبيق للموظفين</button></div></section>';
+      h += '<section class="section"><h2>استيراد الديون القديمة من Excel</h2><p class="hint">نزّل النموذج، واملأ فيه زبائنك وديونهم المتبقية، ثم ارفعه هنا. تظهر لك معاينة قبل الحفظ.</p><div class="row" style="margin-top:8px"><button class="btn quiet small" data-act="import-template">تنزيل نموذج Excel</button><label class="btn small" for="import-file" style="margin:0">رفع الملف المملوء</label><input type="file" id="import-file" accept=".xlsx,.csv" hidden></div></section>';
       h += '<section class="section"><h2>بيانات المحل والفاتورة</h2><form id="f-settings" class="stack"><div><label for="s-shop">اسم المحل</label><input class="f" id="s-shop" maxlength="60" value="' + esc(s.shopName) + '"></div><div class="two"><div><label for="s-phone">هاتف المحل</label><input class="f" id="s-phone" dir="ltr" maxlength="30" value="' + esc(s.shopPhone) + '"></div><div><label for="s-cur">العملة</label><input class="f" id="s-cur" maxlength="12" value="' + esc(s.currency) + '"></div></div><div><label for="s-foot">نص أسفل الفاتورة</label><input class="f" id="s-foot" maxlength="120" value="' + esc(s.footer) + '"></div><div><label for="s-paper">عرض ورق الطابعة</label><select class="f" id="s-paper"><option value="80"' + (s.paper !== '58' ? ' selected' : '') + '>80 ملم</option><option value="58"' + (s.paper === '58' ? ' selected' : '') + '>58 ملم</option></select></div><div class="two"><div><label for="s-pct">نسبة زيادة القسط العامة %</label><input class="f" id="s-pct" inputmode="decimal" value="' + esc((s.installment || {}).pct || 0) + '"></div><div><label for="s-base">تُحسب على</label><select class="f" id="s-base"><option value="price"' + ((s.installment || {}).base !== 'profit' ? ' selected' : '') + '>سعر الجهاز</option><option value="profit"' + ((s.installment || {}).base === 'profit' ? ' selected' : '') + '>الربح</option></select></div></div><fieldset style="border:0;padding:0;margin:0"><legend style="font-weight:500;font-size:14.5px;padding:0;margin-bottom:4px">الخصم</legend><label class="check"><input type="checkbox" id="s-disc-on"' + (discRules().enabled ? ' checked' : '') + '>السماح بالخصم في الفواتير</label><div class="two"><div><label for="s-disc-max">أقصى خصم للموظف (مبلغ)</label><input class="f" id="s-disc-max" inputmode="numeric" value="' + esc(discRules().staffMax || '') + '"></div><div><label for="s-disc-pct">أو نسبة من الفاتورة %</label><input class="f" id="s-disc-pct" inputmode="decimal" value="' + esc(discRules().staffPct || '') + '"></div></div><p class="hint">اتركهما فارغين ليبقى الخصم لك وحدك. إلغاء الخصم يخفيه عن الجميع.</p></fieldset><div><label for="s-limit">أوقف تسجيل الموظف بعد كم ساعة بلا اتصال (0 بلا إيقاف)</label><input class="f" id="s-limit" inputmode="numeric" value="' + esc(s.offlineLimit) + '"></div><button class="btn primary">حفظ البيانات</button></form></section>';
       h += '<section class="section"><h2>إشعارات هاتفك على تيليجرام</h2>';
       if (tg.linked) h += '<p>تعمل على البوت <span class="num">@' + esc(tg.bot) + '</span>. يصلك فيها كل بيع وتسديد، وتقرير يومي الساعة 9 مساءً، وفي يوم 10 من كل شهر الساعة 10 صباحًا تقرير شهري شامل وقائمة المتأخرين مع رابط تذكير واتساب لكل زبون.</p><div class="row" style="margin-top:8px"><button class="btn quiet small" data-act="tg-test">إرسال رسالة تجربة</button></div>' + (s.failedNotices ? '<p class="notice" style="margin-top:8px">' + s.failedNotices + ' رسالة لم تصل.</p>' : '');
@@ -999,6 +1122,28 @@
     'print-invoice': function (t) { var s = S.view.sales[t.dataset.id]; if (!owner()) logEvent('print', 'الفاتورة ' + s.no); printHtml(invoiceHtml(s)); },
     'print-payment': function (t) { var p = S.view.payments[t.dataset.id]; if (!owner()) logEvent('print', 'وصل وكشف ' + (p.customerName || '')); printHtml(paymentHtml(p)); },
     'print-statement': function (t) { var c = S.view.customers[t.dataset.id]; if (!owner()) logEvent('print', 'كشف ' + c.name); printHtml(statementHtml(c)); },
+    'import-template': function () {
+      var ex = Core.addMonths(today(), 1);
+      var rows = [IMPORT_COLS, ['', '', '', '', '', '', '', '', '']];
+      var sample = [IMPORT_COLS, ['أحمد كريم جاسم', '07701234567', 'العمارة، حي الحسين', 'سالم جاسم', '07705556666', 450000, 9, ex, 'ثلاجة من 2025'], ['زينب علي', '07801112233', '', '', '', 120000, '', '', 'دين نقدي']];
+      var help = [['الحقل', 'الشرح'], ['اسم الزبون', 'مطلوب. إذا كان الزبون موجودًا بالاسم نفسه يُضاف الدين إليه'], ['الهاتف وهاتف الكفيل', 'اختياريان، مثل 07701234567'], ['الدين المتبقي', 'مطلوب. المبلغ الذي ما زال على الزبون فقط، بالأرقام'], ['عدد الأشهر المتبقية', 'اختياري. إذا كُتب مع تاريخ القسط القادم يُقسم الدين على الأشهر'], ['تاريخ القسط القادم', 'بالشكل ' + ex + '. إذا تُرك فارغًا يُسجل الدين مستحقًا مرة واحدة'], ['ملاحظة', 'اختيارية، تظهر في كشف الزبون'], ['تنبيه', 'اكتب في الورقة الأولى فقط، ولا تغير ترتيب الأعمدة. الأوراق الأخرى لا تُستورد']];
+      savePdfFile(xlsxBytes([{ name: 'الديون القديمة', rows: rows }, { name: 'مثال', rows: sample }, { name: 'الشرح', rows: help }]), 'old-debts-template.xlsx', XLSX_MIME);
+      toast('نُزّل النموذج. املأ الورقة الأولى ثم ارفعه.');
+    },
+    'import-confirm': function () {
+      var st = S.sheet, n = 0;
+      st.rows.forEach(function (r) {
+        if (r.error || r.skip) return;
+        var cid = r.existingId;
+        if (!cid) {
+          cid = uid('cus');
+          addOp('customer.save', { id: cid, name: r.name, phone: r.phone, address: r.address, guarantorName: r.gName, guarantorPhone: r.gPhone });
+        }
+        addOp('sale.create', { id: uid('sal'), no: nextNo(), type: 'opening', customerId: cid, customerName: r.name, date: today(), months: r.months || 0, firstDue: r.firstDue || '', lines: [{ itemId: '', name: r.note ? 'دين سابق (استيراد): ' + r.note : 'دين سابق (استيراد)', qty: 1, price: r.amount }] });
+        n++;
+      });
+      S.sheet = null; render(); toast('استُورد ' + n + ' دين. سيُرسل إلى الدفتر عند الاتصال.');
+    },
     excel: function () {
       try { var rg = rangeOf(S.report.key); savePdfFile(makeXlsx(rg[0], rg[1]), 'shop-report-' + rg[0].replace(/\//g, '-') + '_' + rg[1].replace(/\//g, '-') + '.xlsx', XLSX_MIME); toast('نُزّل ملف Excel للفترة المختارة.'); }
       catch (e) { toast('تعذر إنشاء ملف Excel: ' + e.message); }
@@ -1064,6 +1209,7 @@
   });
   document.addEventListener('change', function (ev) {
     var t = ev.target;
+    if (t.id === 'import-file') { if (!owner()) return; onImportFile(t.files[0]); t.value = ''; return; }
     if (t.dataset.preview) itemPreview();
     if (t.id === 'rep-from') { S.report.from = fromIso(t.value); render(); }
     if (t.id === 'rep-to') { S.report.to = fromIso(t.value); render(); }
@@ -1209,6 +1355,6 @@
     if ('serviceWorker' in navigator && !window.DEMO_BACKEND) navigator.serviceWorker.register('sw.js').catch(function () {});
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
   }
-  window.__app = { makeXlsx: makeXlsx, makePdf: makePdf, pdfDoc: pdfDoc, flushPdfs: flushPdfs, state: S, api: api, sync: sync, render: render, afterLogin: afterLogin, saveMeta: saveMeta };
+  window.__app = { buildImport: buildImport, readXlsxRows: readXlsxRows, unzip: unzip, onImportFile: onImportFile, xlsxBytes: xlsxBytes, makeXlsx: makeXlsx, makePdf: makePdf, pdfDoc: pdfDoc, flushPdfs: flushPdfs, state: S, api: api, sync: sync, render: render, afterLogin: afterLogin, saveMeta: saveMeta };
   boot();
 })();
