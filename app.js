@@ -649,6 +649,33 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
   }
   /** المتصفح لا يسمح بإرفاق ملف عبر رابط واتساب، لذلك تُستخدم مشاركة الجهاز، وعند عدم توفرها يُنزَّل الملف وتُفتح المحادثة. */
+  /** ضغطة واحدة: يُرفع الملف ويُفتح واتساب على محادثة الزبون نفسه، والرسالة فيها رابط الفاتورة جاهزة للإرسال. */
+  function sendDirect(kind, id) {
+    var d = pdfDoc(kind, id), c = d.customer || {};
+    var phone = waPhone(c.phone);
+    if (!phone) { toast('لا يوجد رقم هاتف لهذا الزبون. أضفه من «تعديل البيانات» ثم أعد المحاولة.'); return; }
+    var bytes;
+    try { bytes = makePdf(d.html); } catch (e) { toast('تعذر إنشاء ملف PDF: ' + e.message); return; }
+    if (!owner()) logEvent('whatsapp', 'PDF ' + d.label);
+    // تُفتح النافذة فورًا حتى لا يمنعها المتصفح، ثم يُوضع فيها رابط المحادثة بعد رفع الملف
+    var win = window.DEMO_BACKEND ? null : window.open('', '_blank');
+    toast('جارٍ تجهيز الفاتورة…');
+    var go = function (text) {
+      var url = 'https://wa.me/' + phone + '?text=' + encodeURIComponent(text);
+      if (window.DEMO_BACKEND) { window.__lastWa = url; toast('في النظام الفعلي تُفتح الآن محادثة ' + (c.name || 'الزبون') + ' والرسالة جاهزة.'); return; }
+      if (win && !win.closed) win.location.href = url; else location.href = url;
+    };
+    var intro = 'مرحبًا ' + (c.name || '') + '، ' + d.share + '.';
+    api('pdf.share', { name: d.file.replace(/\.pdf$/, ''), data: toBase64(bytes) }).then(function (r) {
+      go(intro + '\nلعرض الملف وتنزيله:\n' + r.url);
+    }).catch(function (e) {
+      // بلا إنترنت أو عند الفشل: تُرسل الرسالة نصًا مع الكشف، ويُحفظ الملف على الجهاز
+      savePdfFile(bytes, d.ascii);
+      var body = kind === 'payment' ? paymentText(S.view.payments[id]) : kind === 'sale' ? saleText(S.view.sales[id]) : 'مرحبًا ' + (c.name || '') + '،\n\n' + statementText(c) + shopLine();
+      go(body);
+      toast((e.code === 'net' ? 'لا يوجد إنترنت' : 'تعذر رفع الملف') + '، فأُرسلت التفاصيل نصًا ونُزّل الملف على الجهاز.');
+    });
+  }
   function sendPdfToCustomer(kind, id) {
     var d = pdfDoc(kind, id), bytes;
     try { bytes = makePdf(d.html); } catch (e) { toast('تعذر إنشاء ملف PDF: ' + e.message); return; }
@@ -909,7 +936,7 @@
       (st.fresh && s.pending && !S.online ? '<p class="notice">لا يوجد إنترنت. سيُرسل البيع إلى الدفتر وإلى هاتف صاحب المحل عند الاتصال.</p>' : '') +
       (s.cancelReason ? '<p class="notice bad">سبب الإلغاء: ' + esc(s.cancelReason) + '، ' + esc(s.cancelledBy) + '</p>' : '') + (s.flags ? '<p class="notice">للمراجعة: ' + esc(s.flags) + '</p>' : '') +
       (owner() && pr !== null && !s.cancelled && s.type !== 'opening' ? '<p class="hint" style="margin-bottom:8px">ربح الفاتورة: ' + money(pr) + '</p>' : '') +
-      invoiceHtml(s) + '<div class="row" style="margin-top:12px"><button class="btn primary" data-act="print-invoice" data-id="' + esc(s.id) + '">طباعة الفاتورة</button>' + (s.customerId ? '<button class="btn pay" data-act="pdf-send" data-kind="sale" data-id="' + esc(s.id) + '">إرسال PDF للزبون</button>' : '') + '<button class="btn quiet" data-act="pdf-save" data-kind="sale" data-id="' + esc(s.id) + '">تنزيل PDF</button>' +
+      invoiceHtml(s) + '<div class="row" style="margin-top:12px"><button class="btn primary" data-act="print-invoice" data-id="' + esc(s.id) + '">طباعة الفاتورة</button>' + (s.customerId ? '<button class="btn pay" data-act="wa-direct" data-kind="sale" data-id="' + esc(s.id) + '">إرسال للزبون على واتساب</button><button class="btn quiet" data-act="pdf-send" data-kind="sale" data-id="' + esc(s.id) + '">مشاركة الملف</button>' : '') + '<button class="btn quiet" data-act="pdf-save" data-kind="sale" data-id="' + esc(s.id) + '">تنزيل PDF</button>' +
       (wa ? '<a class="btn quiet" target="_blank" rel="noopener" data-log="whatsapp" data-subject="' + esc('الفاتورة ' + s.no) + '" href="' + esc(wa) + '">رسالة نصية على واتساب</a>' : '') + closeBtn(st.fresh ? 'بيع جديد' : 'إغلاق') + '</div>' +
       (!st.fresh && !s.cancelled && can('cancel') ? confirmBlock('cancel-sale', s.id, 'إلغاء الفاتورة', 'سيعود المخزون وتُلغى أقساطها، ويصل تنبيه لصاحب المحل.') : '');
   }
@@ -923,13 +950,13 @@
     st.focus = false;
     var c = S.view.customers[p.customerId] || {}, wa = waLink(c.phone, paymentText(p));
     return '<h2>' + (st.fresh ? (p.pending && !S.online ? 'حُفظ التسديد على الجهاز' : 'سُجل التسديد') : 'وصل تسديد') + '</h2>' + (p.cancelReason ? '<p class="notice bad">سبب الإلغاء: ' + esc(p.cancelReason) + '، ' + esc(p.cancelledBy) + '</p>' : '') + (p.flags ? '<p class="notice">للمراجعة: ' + esc(p.flags) + '</p>' : '') + paymentHtml(p) +
-      '<div class="row" style="margin-top:12px"><button class="btn primary" data-act="print-payment" data-id="' + esc(p.id) + '">طباعة الوصل والكشف</button><button class="btn pay" data-act="pdf-send" data-kind="payment" data-id="' + esc(p.id) + '">إرسال PDF للزبون</button><button class="btn quiet" data-act="pdf-save" data-kind="payment" data-id="' + esc(p.id) + '">تنزيل PDF</button>' + (wa ? '<a class="btn quiet" target="_blank" rel="noopener" data-log="whatsapp" data-subject="' + esc('كشف ' + (c.name || '')) + '" href="' + esc(wa) + '">رسالة نصية على واتساب</a>' : '<p class="hint" style="flex-basis:100%">أضف رقم هاتف الزبون لفتح محادثته مباشرة.</p>') + closeBtn() + '</div>' +
+      '<div class="row" style="margin-top:12px"><button class="btn primary" data-act="print-payment" data-id="' + esc(p.id) + '">طباعة الوصل والكشف</button><button class="btn pay" data-act="wa-direct" data-kind="payment" data-id="' + esc(p.id) + '">إرسال للزبون على واتساب</button><button class="btn quiet" data-act="pdf-send" data-kind="payment" data-id="' + esc(p.id) + '">مشاركة الملف</button><button class="btn quiet" data-act="pdf-save" data-kind="payment" data-id="' + esc(p.id) + '">تنزيل PDF</button>' + (wa ? '<a class="btn quiet" target="_blank" rel="noopener" data-log="whatsapp" data-subject="' + esc('كشف ' + (c.name || '')) + '" href="' + esc(wa) + '">رسالة نصية على واتساب</a>' : '<p class="hint" style="flex-basis:100%">أضف رقم هاتف الزبون لفتح محادثته مباشرة.</p>') + closeBtn() + '</div>' +
       (!st.fresh && !p.cancelled && can('cancel') ? confirmBlock('cancel-payment', p.id, 'إلغاء التسديد', 'سيعود المبلغ إلى دين الزبون، ويصل تنبيه لصاحب المحل.') : '');
   }
   function sheetStatement(st) {
     st.focus = false;
     var c = S.view.customers[st.customerId], wa = waLink(c.phone, 'مرحبًا ' + c.name + '،\n\n' + statementText(c) + shopLine());
-    return '<h2>كشف حساب</h2>' + statementHtml(c) + '<div class="row" style="margin-top:12px"><button class="btn primary" data-act="print-statement" data-id="' + esc(c.id) + '">طباعة الكشف</button><button class="btn pay" data-act="pdf-send" data-kind="customer" data-id="' + esc(c.id) + '">إرسال PDF للزبون</button><button class="btn quiet" data-act="pdf-save" data-kind="customer" data-id="' + esc(c.id) + '">تنزيل PDF</button>' + (wa ? '<a class="btn quiet" target="_blank" rel="noopener" data-log="whatsapp" data-subject="' + esc('كشف ' + c.name) + '" href="' + esc(wa) + '">رسالة نصية على واتساب</a>' : '') + closeBtn() + '</div>';
+    return '<h2>كشف حساب</h2>' + statementHtml(c) + '<div class="row" style="margin-top:12px"><button class="btn primary" data-act="print-statement" data-id="' + esc(c.id) + '">طباعة الكشف</button><button class="btn pay" data-act="wa-direct" data-kind="customer" data-id="' + esc(c.id) + '">إرسال للزبون على واتساب</button><button class="btn quiet" data-act="pdf-send" data-kind="customer" data-id="' + esc(c.id) + '">مشاركة الملف</button><button class="btn quiet" data-act="pdf-save" data-kind="customer" data-id="' + esc(c.id) + '">تنزيل PDF</button>' + (wa ? '<a class="btn quiet" target="_blank" rel="noopener" data-log="whatsapp" data-subject="' + esc('كشف ' + c.name) + '" href="' + esc(wa) + '">رسالة نصية على واتساب</a>' : '') + closeBtn() + '</div>';
   }
   function sheetCustomer(st) {
     var c = st.customerId ? S.view.customers[st.customerId] : { name: st.name || '' };
@@ -1149,6 +1176,7 @@
       catch (e) { toast('تعذر إنشاء ملف Excel: ' + e.message); }
     },
     'pdf-send': function (t) { sendPdfToCustomer(t.dataset.kind, t.dataset.id); },
+    'wa-direct': function (t) { sendDirect(t.dataset.kind, t.dataset.id); },
     'pdf-save': function (t) { try { var d = pdfDoc(t.dataset.kind, t.dataset.id); savePdfFile(makePdf(d.html), d.ascii); } catch (e) { toast('تعذر إنشاء ملف PDF: ' + e.message); } },
     'cancel-sale': function (t) { var r = $('cancel-reason').value.trim(); if (!r) return sheetError('اكتب سبب الإلغاء.'); S.confirm = null; S.sheet = null; addOp('sale.cancel', { id: t.dataset.id, reason: r }); toast('أُلغيت الفاتورة، ووصل تنبيه لصاحب المحل.'); },
     'cancel-payment': function (t) { var r = $('cancel-reason').value.trim(); if (!r) return sheetError('اكتب سبب الإلغاء.'); S.confirm = null; S.sheet = null; addOp('payment.cancel', { id: t.dataset.id, reason: r }); toast('أُلغي التسديد، ووصل تنبيه لصاحب المحل.'); },
@@ -1355,6 +1383,6 @@
     if ('serviceWorker' in navigator && !window.DEMO_BACKEND) navigator.serviceWorker.register('sw.js').catch(function () {});
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
   }
-  window.__app = { buildImport: buildImport, readXlsxRows: readXlsxRows, unzip: unzip, onImportFile: onImportFile, xlsxBytes: xlsxBytes, makeXlsx: makeXlsx, makePdf: makePdf, pdfDoc: pdfDoc, flushPdfs: flushPdfs, state: S, api: api, sync: sync, render: render, afterLogin: afterLogin, saveMeta: saveMeta };
+  window.__app = { sendDirect: sendDirect, buildImport: buildImport, readXlsxRows: readXlsxRows, unzip: unzip, onImportFile: onImportFile, xlsxBytes: xlsxBytes, makeXlsx: makeXlsx, makePdf: makePdf, pdfDoc: pdfDoc, flushPdfs: flushPdfs, state: S, api: api, sync: sync, render: render, afterLogin: afterLogin, saveMeta: saveMeta };
   boot();
 })();
