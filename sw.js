@@ -1,5 +1,5 @@
 /* يحفظ ملفات التطبيق ليفتح بلا إنترنت. بيانات المحل لا تمر من هنا. */
-const VERSION = 'shop-v11';
+const VERSION = 'shop-v15';
 const SHELL = ['./', './index.html', './app.js', './core.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {

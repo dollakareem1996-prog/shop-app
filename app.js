@@ -6,17 +6,27 @@
     online: true, syncing: false, lastSync: '', authLost: false, lastError: '', sheet: null, cart: null, search: '', custFilter: 'all', report: null, users: null, confirm: null };
   function blank() { return { customers: {}, items: {}, moves: {}, sales: {}, payments: {}, events: {} }; }
   var $ = function (id) { return document.getElementById(id); };
+  /* أيقونات بخط بني وجزء ذهبي، مثل نمط التصميم */
   var ICON = {
-    sell: '<path d="M4 7h16l-1.5 11h-13zM9 7V5a3 3 0 0 1 6 0v2"/>', customers: '<circle cx="9" cy="8" r="3.5"/><path d="M3 20c0-4 3-6 6-6s6 2 6 6M16 5a3.5 3.5 0 0 1 0 6.5M18 14c2 .8 3 3 3 6"/>',
-    home: '<path d="M4 11l8-7 8 7v9h-5v-6H9v6H4z"/>', pay: '<path d="M3 7h18v11H3zM3 11h18M7 15h3"/>',
-    items: '<path d="M4 8l8-4 8 4v9l-8 4-8-4zM4 8l8 4 8-4M12 12v9"/>', reports: '<path d="M5 20V10M12 20V4M19 20v-7"/>', more: '<circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/>',
+    sell: '<path d="M3 4h2l2.3 10.5h10.9L20.5 7H6.1"/><path class="acs" d="M9.5 10h7"/><circle class="ac" cx="9" cy="19" r="1.7"/><circle class="ac" cx="17" cy="19" r="1.7"/>',
+    customers: '<circle cx="8.5" cy="7.5" r="3.3"/><circle cx="16" cy="7.5" r="3.3"/><path class="ac" d="M13 20c.3-3 2-5 4.5-5s4.2 2 4.5 5z"/><path d="M2 20c.4-3.6 3-5.6 6.5-5.6S14.6 16.4 15 20z"/>',
+    home: '<path d="M3 11.5L12 4l9 7.5"/><path d="M5 10v10h14V10"/><path class="ac" d="M10 20v-5.5h4V20z"/>',
+    pay: '<rect x="3" y="6" width="18" height="12" rx="2"/><circle class="ac" cx="12" cy="12" r="2.6"/><path d="M6.5 9.5v5M17.5 9.5v5"/>',
+    items: '<path d="M3.5 7.5L12 3.5l8.5 4v9L12 20.5l-8.5-4z"/><path d="M3.5 7.5L12 11.5l8.5-4M12 11.5v9"/><path class="acs" d="M7.5 5.6l8.4 4"/>',
+    reports: '<path class="acs" d="M4 11l5-4 4 3 7-6"/><rect class="ac" x="4" y="16" width="3.5" height="4" rx="1"/><rect x="10.2" y="13" width="3.5" height="7" rx="1"/><rect x="16.5" y="10" width="3.5" height="10" rx="1"/>',
+    more: '<circle class="ac" cx="5" cy="7" r="1.5"/><circle class="ac" cx="5" cy="12" r="1.5"/><circle class="ac" cx="5" cy="17" r="1.5"/><path d="M9.5 7H20M9.5 12H20M9.5 17H20"/>',
     back: '<path d="M9 5l7 7-7 7"/>'
   };
   function svg(n) { return '<svg viewBox="0 0 24 24" aria-hidden="true">' + ICON[n] + '</svg>'; }
   function esc(s) { return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function latin(s) { return String(s === null || s === undefined ? '' : s).replace(/[٠-٩]/g, function (d) { return String(d.charCodeAt(0) - 0x0660); }).replace(/[۰-۹]/g, function (d) { return String(d.charCodeAt(0) - 0x06F0); }); }
   function parseNum(v) { var s = latin(v).replace(/[\s,٬،]/g, ''); return /^\d+(\.\d+)?$/.test(s) ? Number(s) : null; }
-  function parseAmount(v) { var n = parseNum(v); return n === null ? null : Math.round(n); }
+  /* المبالغ بالدينار: «150.000» أو «150٫000» تعني مئة وخمسين ألفًا وليس 150 */
+  function parseAmount(v) {
+    var t = latin(v).replace(/[\s,٬،]/g, '');
+    if (/^\d{1,3}([.٫]\d{3})+$/.test(t)) t = t.replace(/[.٫]/g, '');
+    var n = parseNum(t.replace('٫', '.')); return n === null ? null : Math.round(n);
+  }
   function fmt(n) { var neg = n < 0; return (neg ? '-' : '') + String(Math.abs(Number(n || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
   function cur() { return S.settings.currency || 'د.ع'; }
   function money(n) { return '<span class="num">' + fmt(n) + '</span> ' + esc(cur()); }
@@ -33,6 +43,9 @@
   function can(p) { return !!(S.me && (S.me.role === 'owner' || (S.me.perms && S.me.perms[p]))); }
   function owner() { return !!(S.me && S.me.role === 'owner'); }
   function monthName(d) { return d.slice(0, 7); }
+  /* نوع البيع يظهر بجانب كل صنف: قسط أو نقد */
+  function payKind(s) { return s.type === 'cash' ? 'نقد' : s.type === 'installment' ? 'قسط' : ''; }
+  function withKind(name, s) { var k = payKind(s); return k ? name + ' (' + k + ')' : name; }
 
   /* ---------- التخزين على الجهاز ---------- */
   var Store = (function () {
@@ -215,8 +228,8 @@
     $('nav').innerHTML = '<div>' + tabs.map(function (t) { return '<a href="#' + t[0] + '" class="' + (active === t[0] ? 'on' : '') + '">' + svg(t[0]) + t[1] + '</a>'; }).join('') + '</div>';
   }
   function applyPaper() {
-    var p = S.settings.paper === '58' ? '58' : '80';
-    $('page-size').textContent = '@page{size:' + p + 'mm auto;margin:' + (p === '58' ? '1' : '2') + 'mm}';
+    var p = paper();
+    $('page-size').textContent = p === 'a4' ? '@page{size:A4;margin:12mm}' : '@page{size:' + p + 'mm auto;margin:' + (p === '58' ? '1' : '2') + 'mm}';
   }
 
   /* ---------- شاشة الدخول ---------- */
@@ -299,7 +312,7 @@
     if (c.lines.length) {
       h += '<div>' + c.lines.map(function (l, i) {
         var lvl = S.stock[l.itemId] || 0, q = parseNum(l.qty) || 0;
-        return '<div class="line"><div class="nm">' + esc(l.name) + (q > lvl ? ' <span class="tag warn">المتوفر ' + fmt(lvl) + '</span>' : '') + '</div><div class="amt">' + money(Core.int(q * (parseAmount(l.price) || 0))) + '</div><div class="ctl">' +
+        return '<div class="line"><div class="nm">' + esc(l.name) + (c.type === 'cash' || c.type === 'installment' ? ' <span class="tag">' + (c.type === 'cash' ? 'نقد' : 'قسط') + '</span>' : '') + (q > lvl ? ' <span class="tag warn">المتوفر ' + fmt(lvl) + '</span>' : '') + '</div><div class="amt">' + money(Core.int(q * (parseAmount(l.price) || 0))) + '</div><div class="ctl">' +
           '<div class="qty"><button type="button" data-act="qty" data-i="' + i + '" data-d="-1" aria-label="إنقاص">−</button><input data-field="qty" data-i="' + i + '" inputmode="decimal" aria-label="الكمية" value="' + esc(l.qty) + '"><button type="button" data-act="qty" data-i="' + i + '" data-d="1" aria-label="زيادة">+</button></div>' +
           (edit ? '<div class="pr"><input class="f" data-field="price" data-i="' + i + '" inputmode="numeric" aria-label="السعر" value="' + esc(l.price) + '"></div>' : '<div class="pr">السعر: ' + money(parseAmount(l.price) || 0) + '</div>') +
           '<button type="button" class="btn quiet small" data-act="del-line" data-i="' + i + '">حذف</button></div></div>';
@@ -447,14 +460,14 @@
     return 'مرحبًا ' + c.name + '،\nنذكّرك بأن القسط الشهري لم يُسدَّد بعد.\nالمتأخر: ' + plain(l.overdue) + '\nالمتبقي على حسابك: ' + plain(Math.max(l.balance, 0)) + shopLine();
   }
   function saleText(s) {
-    var t = 'مرحبًا ' + (s.customerName || '') + '،\nفاتورة رقم ' + s.no + ' بتاريخ ' + s.date + '\n' + s.lines.map(function (l) { return l.name + ' × ' + l.qty + ': ' + plain(Core.int(l.qty * l.price)); }).join('\n') + '\nالمجموع: ' + plain(s.total);
+    var t = 'مرحبًا ' + (s.customerName || '') + '،\nفاتورة رقم ' + s.no + ' بتاريخ ' + s.date + '\n' + s.lines.map(function (l) { return withKind(l.name, s) + ' × ' + l.qty + ': ' + plain(Core.int(l.qty * l.price)); }).join('\n') + '\nالمجموع: ' + plain(s.total);
     if (s.type === 'installment') t += '\nالمقدمة: ' + plain(s.down) + '\nالأقساط:\n' + s.schedule.map(function (e) { return e.due + ': ' + plain(e.amount); }).join('\n');
     if (s.customerId) t += '\nالمتبقي على حسابك: ' + plain(Math.max(ledgerOf(s.customerId).balance, 0));
     return t + shopLine();
   }
   function statementText(c) {
     var l = ledgerOf(c.id), sales = Core.values(S.view.sales).filter(function (s) { return s.customerId === c.id && !s.cancelled; }).sort(function (a, b) { return a.date < b.date ? -1 : 1; });
-    var t = 'المشتريات:\n' + sales.map(function (s) { return s.date + ': ' + s.lines.map(function (x) { return x.name + ' × ' + x.qty; }).join('، ') + '\nالقيمة: ' + plain(s.total) + (s.type === 'installment' ? '، المقدمة: ' + plain(s.down) : ''); }).join('\n');
+    var t = 'المشتريات:\n' + sales.map(function (s) { return s.date + ': ' + s.lines.map(function (x) { return withKind(x.name, s) + ' × ' + x.qty; }).join('، ') + '\nالقيمة: ' + plain(s.total) + (s.type === 'installment' ? '، المقدمة: ' + plain(s.down) : ''); }).join('\n');
     if (l.entries.length) t += '\n\nالأقساط حسب الشهر:\n' + l.entries.map(function (e) { return monthName(e.due) + ': ' + (e.rem === 0 ? 'مسدد' : e.paid ? 'مسدد ' + fmt(e.paid) + '، متبق ' + fmt(e.rem) : 'متبق ' + fmt(e.rem)) + (e.overdue ? ' (متأخر)' : ''); }).join('\n');
     if (l.payments.length) t += '\n\nالتسديدات:\n' + l.payments.map(function (p) { return p.date + ': ' + plain(p.amount); }).join('\n');
     return t + '\n\nالمتبقي: ' + plain(Math.max(l.balance, 0));
@@ -476,16 +489,17 @@
     return '<hr><b>الأقساط حسب الشهر</b><table><thead><tr><th>الشهر</th><th class="n">القسط</th><th class="n">مسدد</th><th class="n">متبقي</th></tr></thead><tbody>' +
       entries.map(function (e) { return '<tr><td>' + esc(monthName(e.due)) + '</td><td class="n">' + fmt(e.amount) + '</td><td class="n">' + fmt(e.paid) + '</td><td class="n">' + fmt(e.rem) + '</td></tr>'; }).join('') + '</tbody></table>';
   }
-  function paymentsTable(list) {
+  function paymentsTable(list, title) {
     if (!list.length) return '';
-    return '<hr><b>التسديدات</b><table><tbody>' + list.map(function (p) { return '<tr><td>' + esc(p.date) + '</td><td class="n">' + fmt(p.amount) + '</td></tr>'; }).join('') + '</tbody></table>';
+    return '<hr><b>' + (title || 'التسديدات') + '</b><table><tbody>' + list.map(function (p) { return '<tr><td>' + esc(p.date) + '</td><td class="n">' + fmt(p.amount) + '</td></tr>'; }).join('') + '</tbody></table>';
   }
   function linesTable(s) {
     return '<table><thead><tr><th>الصنف</th><th class="n">كمية</th><th class="n">سعر</th><th class="n">مبلغ</th></tr></thead><tbody>' +
-      s.lines.map(function (l) { return '<tr><td>' + esc(l.name) + '</td><td class="n">' + l.qty + '</td><td class="n">' + fmt(l.price) + '</td><td class="n">' + fmt(Core.int(l.qty * l.price)) + '</td></tr>'; }).join('') + '</tbody></table>';
+      s.lines.map(function (l) { return '<tr><td>' + esc(withKind(l.name, s)) + '</td><td class="n">' + l.qty + '</td><td class="n">' + fmt(l.price) + '</td><td class="n">' + fmt(Core.int(l.qty * l.price)) + '</td></tr>'; }).join('') + '</tbody></table>';
   }
   function guarantorRows(c) { return (c.guarantorName ? kv('الكفيل', esc(c.guarantorName)) : '') + (c.guarantorPhone ? kv('هاتف الكفيل', esc(c.guarantorPhone)) : ''); }
-  function paperCls() { return S.settings.paper === '58' ? 'receipt p58' : 'receipt'; }
+  function paper() { var p = S.settings.paper; return p === '58' || p === 'a4' ? p : '80'; }
+  function paperCls() { var p = paper(); return p === '58' ? 'receipt p58' : p === 'a4' ? 'receipt a4' : 'receipt'; }
   function invoiceHtml(s) {
     var led = s.customerId ? ledgerOf(s.customerId) : null;
     var h = '<div class="' + paperCls() + '">' + rcHead(s.cancelled ? 'فاتورة ملغاة' : (s.type === 'cash' ? 'فاتورة بيع نقدي' : s.type === 'installment' ? 'فاتورة بيع بالأقساط' : 'دين سابق'));
@@ -495,7 +509,7 @@
     if (s.type === 'installment') h += kv('المقدمة', fmt(s.down)) + kv('المتبقي من الفاتورة', fmt(s.total - s.down));
     if (led && !s.cancelled) {
       h += scheduleTable(led.entries.filter(function (e) { return e.saleId === s.id; }));
-      h += paymentsTable(led.payments);
+      h += paymentsTable(led.payments, 'تسديدات الزبون (لكل فواتيره)');
       h += '<hr>' + kv('مجموع المتبقي على الزبون', plain(Math.max(led.balance, 0)), 'tot');
     }
     return h + rcFoot() + '</div>';
@@ -508,7 +522,10 @@
     var l = ledgerOf(c.id);
     var sales = Core.values(S.view.sales).filter(function (s) { return s.customerId === c.id && !s.cancelled; }).sort(function (a, b) { return a.date < b.date ? -1 : 1; });
     var h = '<hr><b>المشتريات</b>' + (sales.map(function (s) { return '<div style="margin-top:4px">' + kv(esc(s.date) + ' رقم ' + esc(s.no), fmt(s.total)) + linesTable(s) + (s.type === 'installment' ? kv('المقدمة', fmt(s.down)) : '') + '</div>'; }).join('') || '<p>لا توجد مشتريات.</p>');
-    h += scheduleTable(l.entries) + paymentsTable(l.payments) + '<hr>' + kv('مجموع الأقساط والديون', fmt(l.debts)) + kv('مجموع التسديدات', fmt(l.paid)) + (l.overdue ? kv('المتأخر', fmt(l.overdue)) : '') + kv('المتبقي', plain(Math.max(l.balance, 0)), 'tot');
+    // الملخص يطابق ما يراه الزبون: كل المشتريات، ثم كل ما دفعه (نقدًا ومقدمات وتسديدات)، والفرق هو المتبقي
+    var bought = 0, upfront = 0;
+    sales.forEach(function (s) { bought += s.total; upfront += s.type === 'cash' ? s.total : s.type === 'installment' ? s.down : 0; });
+    h += scheduleTable(l.entries) + paymentsTable(l.payments) + '<hr>' + kv('مجموع المشتريات', fmt(bought)) + (upfront ? kv('المدفوع نقدًا ومقدمات', fmt(upfront)) : '') + kv('مجموع التسديدات', fmt(l.paid)) + kv('مجموع المدفوع', fmt(upfront + l.paid)) + (l.overdue ? kv('المتأخر', fmt(l.overdue)) : '') + kv('المتبقي', plain(Math.max(l.balance, 0)), 'tot');
     return h;
   }
   function paymentHtml(p) {
@@ -517,17 +534,21 @@
     return h + statementBody(c) + rcFoot() + '</div>';
   }
   /* ---------- ملف PDF: يُرسم على الجهاز فيعمل بلا إنترنت ويحفظ شكل الحروف العربية ---------- */
-  var PDF = { W: 1190, H: 1684, M: 80, FONT: '"IBM Plex Sans Arabic",Tahoma,Arial,sans-serif' };
-  function pdfPages(html) {
+  var PDF = { W: 1190, H: 1684, M: 80, K: 1, FONT: '"IBM Plex Sans Arabic",Tahoma,Arial,sans-serif' };
+  /* أبعاد الصورة تتبع نوع الطابعة: عرض الوصل الحراري 58 أو 80 ملم، أو صفحة A4 */
+  var IMG = { '58': { W: 640, M: 24, K: 1.5 }, '80': { W: 820, M: 30, K: 1.4 }, a4: { W: 1190, M: 80, K: 1 } };
+  function pdfPages(html, image) {
+    var dim = image ? IMG[paper()] : PDF, W = dim.W, M = dim.M, K = dim.K;
     var box = document.createElement('div'); box.innerHTML = html;
-    var pages = [], c, ctx, y;
+    var pages = [], used = [], c, ctx, y, PH = image ? 3000 : PDF.H;
     var open = function () {
-      c = document.createElement('canvas'); c.width = PDF.W; c.height = PDF.H; c.dir = 'rtl';
-      ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, PDF.W, PDF.H); ctx.fillStyle = '#000';
-      ctx.direction = 'rtl'; ctx.textBaseline = 'alphabetic'; y = PDF.M; pages.push(c);
+      if (c) used.push(y);
+      c = document.createElement('canvas'); c.width = Math.round(W * K); c.height = Math.round(PH * K); c.dir = 'rtl';
+      ctx = c.getContext('2d'); ctx.scale(K, K); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, PH); ctx.fillStyle = '#000';
+      ctx.direction = 'rtl'; ctx.textBaseline = 'alphabetic'; y = M; pages.push(c);
     };
-    var R = PDF.W - PDF.M, L = PDF.M, CW = R - L;
-    var fit = function (h) { if (y + h > PDF.H - PDF.M - 30) { var f = ctx.font; open(); ctx.font = f; } };
+    var R = W - M, L = M, CW = R - L;
+    var fit = function (h) { if (y + h > PH - M - 30) { var f = ctx.font; open(); ctx.font = f; } };
     var font = function (size, bold) { ctx.font = (bold ? '700 ' : '400 ') + size + 'px ' + PDF.FONT; };
     var wrap = function (t, max) {
       var out = [], cur = '';
@@ -575,13 +596,13 @@
     var walk = function (parent) {
       Array.prototype.forEach.call(parent.children, function (el) {
         var tag = el.tagName;
-        if (tag === 'H3') { font(44, true); fit(60); y += 46; text(el.textContent, PDF.W / 2, 'center'); y += 14; }
+        if (tag === 'H3') { font(44, true); fit(60); y += 46; text(el.textContent, W / 2, 'center'); y += 14; }
         else if (tag === 'HR') { fit(24); y += 9; rule(true); y += 9; }
         else if (tag === 'TABLE') table(el);
         else if (tag === 'B') { font(28, true); fit(46); y += 34; text(el.textContent, R, 'right'); y += 10; }
         else if (tag === 'P') {
           var bold = !!el.querySelector('b'); font(bold ? 32 : 25, bold); fit(42); y += bold ? 36 : 31;
-          text(el.textContent, el.classList.contains('c') ? PDF.W / 2 : R, el.classList.contains('c') ? 'center' : 'right'); y += 7;
+          text(el.textContent, el.classList.contains('c') ? W / 2 : R, el.classList.contains('c') ? 'center' : 'right'); y += 7;
         }
         else if (tag === 'DIV' && el.classList.contains('kv')) kv(el);
         else if (tag === 'DIV') { y += 4; walk(el); }
@@ -589,6 +610,17 @@
     };
     open();
     walk(box.querySelector('.receipt') || box);
+    if (image) {
+      // صورة واحدة طويلة مثل وصل الطابعة: تُلصق الصفحات تحت بعضها بلا فراغات
+      used.push(y);
+      var parts = used.map(function (u, i) { var from = i ? M - 10 : 0; return { from: from, h: u - from + (i === used.length - 1 ? M : 10) }; });
+      var H = parts.reduce(function (a, x) { return a + x.h; }, 0);
+      var out = document.createElement('canvas'); out.width = Math.round(W * K); out.height = Math.round(H * K);
+      var o = out.getContext('2d'); o.fillStyle = '#fff'; o.fillRect(0, 0, out.width, out.height);
+      var at = 0;
+      pages.forEach(function (pg, i) { var f = Math.round(parts[i].from * K), h = Math.round(parts[i].h * K); o.drawImage(pg, 0, f, out.width, h, 0, at, out.width, h); at += h; });
+      return [out];
+    }
     pages.forEach(function (p, i) {
       if (pages.length < 2) return;
       var g = p.getContext('2d'); g.direction = 'rtl'; g.fillStyle = '#000'; g.font = '400 22px ' + PDF.FONT; g.textAlign = 'center';
@@ -601,7 +633,9 @@
     var enc = function (s) { var a = new Uint8Array(s.length); for (var i = 0; i < s.length; i++) a[i] = s.charCodeAt(i) & 255; return a; };
     var chunks = [], offs = [], len = 0;
     var put = function (d) { var a = typeof d === 'string' ? enc(d) : d; chunks.push(a); len += a.length; };
-    var pages = pdfPages(html), n = pages.length, kids = [];
+    // ورق حراري: صفحة واحدة طويلة بعرض 58 أو 80 ملم. ورق عادي: صفحات A4
+    var thermal = paper() !== 'a4', pages = pdfPages(html, thermal), n = pages.length, kids = [];
+    var pw = thermal ? (paper() === '58' ? 164.41 : 226.77) : 595.28;
     for (var k = 0; k < n; k++) kids.push((3 + k * 3) + ' 0 R');
     var obj = function (id, body, stream) {
       offs[id] = len; put(id + ' 0 obj\n' + body + '\n');
@@ -613,8 +647,9 @@
     obj(2, '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + n + ' >>');
     pages.forEach(function (c, i) {
       var id = 3 + i * 3, jpg = atob(c.toDataURL('image/jpeg', 0.92).split(',')[1]);
-      var draw = 'q 595.28 0 0 841.89 0 0 cm /Im0 Do Q';
-      obj(id, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /XObject << /Im0 ' + (id + 2) + ' 0 R >> >> /Contents ' + (id + 1) + ' 0 R >>');
+      var ph = thermal ? Math.round(pw * c.height / c.width * 100) / 100 : 841.89;
+      var draw = 'q ' + pw + ' 0 0 ' + ph + ' 0 0 cm /Im0 Do Q';
+      obj(id, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + pw + ' ' + ph + '] /Resources << /XObject << /Im0 ' + (id + 2) + ' 0 R >> >> /Contents ' + (id + 1) + ' 0 R >>');
       obj(id + 1, '<< /Length ' + draw.length + ' >>', draw);
       obj(id + 2, '<< /Type /XObject /Subtype /Image /Width ' + c.width + ' /Height ' + c.height + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + jpg.length + ' >>', enc(jpg));
     });
@@ -624,6 +659,12 @@
     var out = new Uint8Array(len), pos = 0;
     chunks.forEach(function (a) { out.set(a, pos); pos += a.length; });
     return out;
+  }
+  /** صورة الفاتورة بعرض الطابعة (للمعاينة والفحص). */
+  function makeImage(html) {
+    var c = pdfPages(html, true)[0], jpg = atob(c.toDataURL('image/jpeg', 0.9).split(',')[1]);
+    var bytes = new Uint8Array(jpg.length); for (var i = 0; i < jpg.length; i++) bytes[i] = jpg.charCodeAt(i);
+    return { bytes: bytes, canvas: c };
   }
   function toBase64(bytes) {
     var s = '', step = 0x8000;
@@ -698,7 +739,7 @@
       try {
         rebuild();
         var d = pdfDoc(kind, id);
-        S.pdfQueue.push({ id: uid('pdf'), name: d.ascii, caption: d.caption, data: toBase64(makePdf(d.html)), createdAt: nowText(), tries: 0 });
+        S.pdfQueue.push({ id: uid('pdf'), name: d.ascii, type: 'pdf', caption: d.caption, data: toBase64(makePdf(d.html)), createdAt: nowText(), tries: 0 });
         savePdfQueue().then(function () { if (S.online && !S.pending.length) flushPdfs(); });
       } catch (e) { /* فشل الملف لا يوقف تسجيل الحركة */ }
     }
@@ -708,7 +749,7 @@
     if (pdfBusy || !S.pdfQueue.length || !S.token) return;
     pdfBusy = true;
     var item = S.pdfQueue[0];
-    api('pdf.send', { id: item.id, name: item.name, caption: item.caption, data: item.data, createdAt: item.createdAt }).then(function () {
+    api('pdf.send', { id: item.id, name: item.name, type: item.type || 'pdf', w: item.w || 0, h: item.h || 0, caption: item.caption, data: item.data, createdAt: item.createdAt }).then(function () {
       S.pdfQueue.shift(); return savePdfQueue().then(function () { pdfBusy = false; flushPdfs(); });
     }).catch(function (e) {
       pdfBusy = false;
@@ -1091,7 +1132,7 @@
       var tg = s.telegram || {}, bk = s.backup || {};
       h += '<section class="section"><h2>المستخدمون والصلاحيات</h2><p class="hint">أضف البائعين وحدد ما يراه كل منهم.</p><div class="row" style="margin-top:8px"><a class="btn quiet small" href="#users">إدارة المستخدمين</a><button class="btn quiet small" data-act="copy-invite">نسخ رابط التطبيق للموظفين</button></div></section>';
       h += '<section class="section"><h2>استيراد الديون القديمة من Excel</h2><p class="hint">نزّل النموذج، واملأ فيه زبائنك وديونهم المتبقية، ثم ارفعه هنا. تظهر لك معاينة قبل الحفظ.</p><div class="row" style="margin-top:8px"><button class="btn quiet small" data-act="import-template">تنزيل نموذج Excel</button><label class="btn small" for="import-file" style="margin:0">رفع الملف المملوء</label><input type="file" id="import-file" accept=".xlsx,.csv" hidden></div></section>';
-      h += '<section class="section"><h2>بيانات المحل والفاتورة</h2><form id="f-settings" class="stack"><div><label for="s-shop">اسم المحل</label><input class="f" id="s-shop" maxlength="60" value="' + esc(s.shopName) + '"></div><div class="two"><div><label for="s-phone">هاتف المحل</label><input class="f" id="s-phone" dir="ltr" maxlength="30" value="' + esc(s.shopPhone) + '"></div><div><label for="s-cur">العملة</label><input class="f" id="s-cur" maxlength="12" value="' + esc(s.currency) + '"></div></div><div><label for="s-foot">نص أسفل الفاتورة</label><input class="f" id="s-foot" maxlength="120" value="' + esc(s.footer) + '"></div><div><label for="s-paper">عرض ورق الطابعة</label><select class="f" id="s-paper"><option value="80"' + (s.paper !== '58' ? ' selected' : '') + '>80 ملم</option><option value="58"' + (s.paper === '58' ? ' selected' : '') + '>58 ملم</option></select></div><div class="two"><div><label for="s-pct">نسبة زيادة القسط العامة %</label><input class="f" id="s-pct" inputmode="decimal" value="' + esc((s.installment || {}).pct || 0) + '"></div><div><label for="s-base">تُحسب على</label><select class="f" id="s-base"><option value="price"' + ((s.installment || {}).base !== 'profit' ? ' selected' : '') + '>سعر الجهاز</option><option value="profit"' + ((s.installment || {}).base === 'profit' ? ' selected' : '') + '>الربح</option></select></div></div><fieldset style="border:0;padding:0;margin:0"><legend style="font-weight:500;font-size:14.5px;padding:0;margin-bottom:4px">الخصم</legend><label class="check"><input type="checkbox" id="s-disc-on"' + (discRules().enabled ? ' checked' : '') + '>السماح بالخصم في الفواتير</label><div class="two"><div><label for="s-disc-max">أقصى خصم للموظف (مبلغ)</label><input class="f" id="s-disc-max" inputmode="numeric" value="' + esc(discRules().staffMax || '') + '"></div><div><label for="s-disc-pct">أو نسبة من الفاتورة %</label><input class="f" id="s-disc-pct" inputmode="decimal" value="' + esc(discRules().staffPct || '') + '"></div></div><p class="hint">اتركهما فارغين ليبقى الخصم لك وحدك. إلغاء الخصم يخفيه عن الجميع.</p></fieldset><div><label for="s-limit">أوقف تسجيل الموظف بعد كم ساعة بلا اتصال (0 بلا إيقاف)</label><input class="f" id="s-limit" inputmode="numeric" value="' + esc(s.offlineLimit) + '"></div><button class="btn primary">حفظ البيانات</button></form></section>';
+      h += '<section class="section"><h2>بيانات المحل والفاتورة</h2><form id="f-settings" class="stack"><div><label for="s-shop">اسم المحل</label><input class="f" id="s-shop" maxlength="60" value="' + esc(s.shopName) + '"></div><div class="two"><div><label for="s-phone">هاتف المحل</label><input class="f" id="s-phone" dir="ltr" maxlength="30" value="' + esc(s.shopPhone) + '"></div><div><label for="s-cur">العملة</label><input class="f" id="s-cur" maxlength="12" value="' + esc(s.currency) + '"></div></div><div><label for="s-foot">نص أسفل الفاتورة</label><input class="f" id="s-foot" maxlength="120" value="' + esc(s.footer) + '"></div><div><label for="s-paper">عرض ورق الطابعة</label><select class="f" id="s-paper"><option value="80"' + (s.paper !== '58' && s.paper !== 'a4' ? ' selected' : '') + '>حرارية 80 ملم</option><option value="58"' + (s.paper === '58' ? ' selected' : '') + '>حرارية 58 ملم</option><option value="a4"' + (s.paper === 'a4' ? ' selected' : '') + '>عادية A4</option></select></div><div class="two"><div><label for="s-pct">نسبة زيادة القسط العامة %</label><input class="f" id="s-pct" inputmode="decimal" value="' + esc((s.installment || {}).pct || 0) + '"></div><div><label for="s-base">تُحسب على</label><select class="f" id="s-base"><option value="price"' + ((s.installment || {}).base !== 'profit' ? ' selected' : '') + '>سعر الجهاز</option><option value="profit"' + ((s.installment || {}).base === 'profit' ? ' selected' : '') + '>الربح</option></select></div></div><fieldset style="border:0;padding:0;margin:0"><legend style="font-weight:500;font-size:14.5px;padding:0;margin-bottom:4px">الخصم</legend><label class="check"><input type="checkbox" id="s-disc-on"' + (discRules().enabled ? ' checked' : '') + '>السماح بالخصم في الفواتير</label><div class="two"><div><label for="s-disc-max">أقصى خصم للموظف (مبلغ)</label><input class="f" id="s-disc-max" inputmode="numeric" value="' + esc(discRules().staffMax || '') + '"></div><div><label for="s-disc-pct">أو نسبة من الفاتورة %</label><input class="f" id="s-disc-pct" inputmode="decimal" value="' + esc(discRules().staffPct || '') + '"></div></div><p class="hint">اتركهما فارغين ليبقى الخصم لك وحدك. إلغاء الخصم يخفيه عن الجميع.</p></fieldset><div><label for="s-limit">أوقف تسجيل الموظف بعد كم ساعة بلا اتصال (0 بلا إيقاف)</label><input class="f" id="s-limit" inputmode="numeric" value="' + esc(s.offlineLimit) + '"></div><button class="btn primary">حفظ البيانات</button></form></section>';
       h += '<section class="section"><h2>إشعارات هاتفك على تيليجرام</h2>';
       if (tg.linked) h += '<p>تعمل على البوت <span class="num">@' + esc(tg.bot) + '</span>. يصلك فيها كل بيع وتسديد، وتقرير يومي الساعة 9 مساءً، وفي يوم 10 من كل شهر الساعة 10 صباحًا تقرير شهري شامل وقائمة المتأخرين مع رابط تذكير واتساب لكل زبون.</p><div class="row" style="margin-top:8px"><button class="btn quiet small" data-act="tg-test">إرسال رسالة تجربة</button></div>' + (s.failedNotices ? '<p class="notice" style="margin-top:8px">' + s.failedNotices + ' رسالة لم تصل.</p>' : '');
       else if (tg.hasToken) h += '<p>البوت المحفوظ: <span class="num">@' + esc(tg.bot) + '</span>. اضغط «فتح تيليجرام» ثم Start، ثم عد واضغط «تأكيد الربط».</p><div class="row" style="margin-top:8px"><a class="btn small" target="_blank" rel="noopener" href="' + esc(tg.link) + '">فتح تيليجرام</a><button class="btn quiet small" data-act="tg-check">تأكيد الربط</button></div><p class="hint" style="margin-top:8px">إذا لم يظهر زر Start: انسخ رمز الربط وأرسله إلى البوت كرسالة عادية، ثم اضغط «تأكيد الربط».</p><div class="row" style="margin-top:6px"><span class="num" dir="ltr" style="user-select:all">' + esc((tg.link || '').split('start=')[1] || '') + '</span><button class="btn quiet small" data-act="tg-copy">نسخ رمز الربط</button></div>';
@@ -1393,6 +1434,6 @@
     if ('serviceWorker' in navigator && !window.DEMO_BACKEND) navigator.serviceWorker.register('sw.js').catch(function () {});
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(function () {});
   }
-  window.__app = { sendDirect: sendDirect, buildImport: buildImport, readXlsxRows: readXlsxRows, unzip: unzip, onImportFile: onImportFile, xlsxBytes: xlsxBytes, makeXlsx: makeXlsx, makePdf: makePdf, pdfDoc: pdfDoc, flushPdfs: flushPdfs, state: S, api: api, sync: sync, render: render, afterLogin: afterLogin, saveMeta: saveMeta };
+  window.__app = { sendDirect: sendDirect, buildImport: buildImport, readXlsxRows: readXlsxRows, unzip: unzip, onImportFile: onImportFile, xlsxBytes: xlsxBytes, makeXlsx: makeXlsx, makePdf: makePdf, makeImage: makeImage, pdfDoc: pdfDoc, flushPdfs: flushPdfs, state: S, api: api, sync: sync, render: render, afterLogin: afterLogin, saveMeta: saveMeta };
   boot();
 })();
