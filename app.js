@@ -237,7 +237,7 @@
     if (!motionOk()) return;
     var c = document.createElement('canvas'), x = c.getContext('2d'), W = c.width = innerWidth, H = c.height = innerHeight;
     c.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:99'; document.body.appendChild(c);
-    var cols = ['#5E866C', '#C1A68B', '#E7D8C3', '#2E3A33', '#FFFFFF'], P = [];
+    var cols = ['#5E866C', '#FF8882', '#FFC2B5', '#9DBDB8', '#FFFFFF'], P = [];
     for (var i = 0; i < 120; i++) P.push({ x: W / 2, y: H * 0.35, vx: (Math.random() - 0.5) * 14, vy: -Math.random() * 13 - 4, r: Math.random() * 6, s: Math.random() * 5 + 4, c: cols[i % cols.length] });
     var t = 0, go = function () {
       x.clearRect(0, 0, W, H); t++;
@@ -304,7 +304,7 @@
     h += '<button class="late-card' + (late.length ? '' : ' none') + '" data-act="go-late"><span><b>' + (late.length ? late.length + ' زبائن متأخرون عن القسط' : 'لا يوجد متأخرون') + '</b><small>' + (late.length ? 'المتأخر: ' + money(r.overdue) + '. اضغط لتذكيرهم على واتساب' : 'كل الأقساط المستحقة مسددة') + '</small></span></button>';
     var tile = function (to, icon, label, cls) { return '<a class="tile ' + (cls || '') + '" href="#' + to + '"><span class="ic">' + svg(icon) + '</span><span>' + label + '</span></a>'; };
     h += '<div class="tiles">' + tile('sell', 'sell', 'بيع جديد', 'main') + tile('customers', 'pay', 'تسديد', 'green') + tile('customers', 'customers', 'الزبائن') + (can('viewReports') ? tile('reports', 'reports', 'التقارير') : tile('items', 'items', 'الأصناف')) + '</div>';
-    var recent = Core.values(S.view.sales).filter(function (s) { return s.type !== 'opening'; }).sort(byDateDesc).slice(0, 5);
+    var recent = Core.values(S.view.sales).filter(function (s) { return s.type !== 'opening' && !s.cancelled; }).sort(byDateDesc).slice(0, 5);
     if (recent.length) h += '<section class="section"><h2>آخر الفواتير</h2><ul class="list">' + recent.map(saleRow).join('') + '</ul></section>';
     return h;
   }
@@ -474,7 +474,10 @@
 
   /* ---------- واتساب ---------- */
   function waPhone(p) { var s = latin(p).replace(/[^\d]/g, ''); if (!s) return ''; if (s.indexOf('00') === 0) return s.slice(2); if (s.charAt(0) === '0') return '964' + s.slice(1); return s; }
-  function waLink(phone, text) { var p = waPhone(phone); return p ? 'https://wa.me/' + p + '?text=' + encodeURIComponent(text) : ''; }
+  /* رابط يفتح المحادثة مباشرة بلا صفحة «متابعة إلى الدردشة»: تطبيق واتساب على الهاتف، وواتساب ويب على الحاسبة */
+  function isMobile() { return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || ''); }
+  function waUrl(p, text) { var t = encodeURIComponent(text); return isMobile() ? 'whatsapp://send?phone=' + p + '&text=' + t : 'https://web.whatsapp.com/send?phone=' + p + '&text=' + t; }
+  function waLink(phone, text) { var p = waPhone(phone); return p ? waUrl(p, text) : ''; }
   function shopLine() { return S.settings.shopName ? '\n' + S.settings.shopName : ''; }
   function reminderText(c) {
     var l = ledgerOf(c.id), t = 'السلام عليكم ' + c.name + '،\nالمتبقي على حسابك: ' + plain(Math.max(l.balance, 0));
@@ -541,7 +544,10 @@
     if (s.discount) h += kv('الخصم', fmt(s.discount));
     h += kv('المجموع', plain(s.total), 'tot');
     if (s.type === 'installment') h += kv('المقدمة', fmt(s.down)) + kv('المتبقي من الفاتورة', fmt(s.total - s.down));
-    if (led && !s.cancelled) {
+    if (led && !s.cancelled && s.type === 'cash' && led.balance > 0) {
+      // زبون عليه أقساط: تُلحق بفاتورة النقد تفاصيل حساب الأقساط حتى يرى كل شيء في ورقة واحدة
+      h += '<hr><p class="c"><b>حساب الأقساط والديون</b></p>' + statementBody(S.view.customers[s.customerId] || { id: s.customerId });
+    } else if (led && !s.cancelled && s.type !== 'cash') {
       h += paymentsTable(led.payments, 'تسديدات الزبون');
       h += '<hr>' + kv('مجموع المتبقي على الزبون', plain(Math.max(led.balance, 0)), 'tot');
     }
@@ -724,31 +730,57 @@
   }
   /** المتصفح لا يسمح بإرفاق ملف عبر رابط واتساب، لذلك تُستخدم مشاركة الجهاز، وعند عدم توفرها يُنزَّل الملف وتُفتح المحادثة. */
   /** ضغطة واحدة: يُرفع الملف ويُفتح واتساب على محادثة الزبون نفسه، والرسالة فيها رابط الفاتورة جاهزة للإرسال. */
+  /* يُرفع الملف مسبقًا عند فتح الفاتورة، فيكون الرابط جاهزًا لحظة الضغط على زر الإرسال */
+  var SHARE = {};
+  function shareLink(kind, id) {
+    var k = kind + ':' + id;
+    if (SHARE[k]) return SHARE[k].p;
+    var d = pdfDoc(kind, id), bytes = makePdf(d.html);
+    var rec = SHARE[k] = { bytes: bytes };
+    rec.p = api('pdf.share', { name: d.file.replace(/\.pdf$/, ''), data: toBase64(bytes) }).then(function (r) { rec.url = r.url; return r.url; }, function (e) { delete SHARE[k]; throw e; });
+    return rec.p;
+  }
+  function prefetchShare() {
+    var b = document.querySelector('#overlay [data-act="wa-direct"]');
+    if (!b || !S.online || window.DEMO_BACKEND) return;
+    var c = pdfDoc(b.dataset.kind, b.dataset.id).customer || {};
+    if (!waPhone(c.phone)) return;
+    try { shareLink(b.dataset.kind, b.dataset.id).catch(function () {}); } catch (e) {}
+  }
   function sendDirect(kind, id) {
     var d = pdfDoc(kind, id), c = d.customer || {};
     var phone = waPhone(c.phone);
     if (!phone) { toast('لا يوجد رقم هاتف لهذا الزبون. أضفه من «تعديل البيانات» ثم أعد المحاولة.'); return; }
-    var bytes;
-    try { bytes = makePdf(d.html); } catch (e) { toast('تعذر إنشاء ملف PDF: ' + e.message); return; }
     if (!owner()) logEvent('whatsapp', 'PDF ' + d.label);
-    // تُفتح النافذة فورًا حتى لا يمنعها المتصفح، ثم يُوضع فيها رابط المحادثة بعد رفع الملف
-    var win = window.DEMO_BACKEND ? null : window.open('', '_blank');
-    toast('جارٍ تجهيز الفاتورة…');
-    var go = function (text) {
-      var url = 'https://wa.me/' + phone + '?text=' + encodeURIComponent(text);
-      if (window.DEMO_BACKEND) { window.__lastWa = url; toast('في النظام الفعلي تُفتح الآن محادثة ' + (c.name || 'الزبون') + ' والرسالة جاهزة.'); return; }
-      if (win && !win.closed) win.location.href = url; else location.href = url;
-    };
     var intro = 'السلام عليكم ' + (c.name || '') + '، ' + d.share + '.';
-    api('pdf.share', { name: d.file.replace(/\.pdf$/, ''), data: toBase64(bytes) }).then(function (r) {
-      go(intro + '\nلعرض الملف وتنزيله:\n' + r.url);
-    }).catch(function (e) {
-      // بلا إنترنت أو عند الفشل: تُرسل الرسالة نصًا مع الكشف، ويُحفظ الملف على الجهاز
-      savePdfFile(bytes, d.ascii);
+    var open = function (text) {
+      var url = waUrl(phone, text);
+      if (window.DEMO_BACKEND) { window.__lastWa = url; toast('في النظام الفعلي تُفتح الآن محادثة ' + (c.name || 'الزبون') + ' والرسالة جاهزة.'); return; }
+      if (isMobile()) location.href = url; else { var w = window.open(url, 'whatsapp'); if (!w) location.href = url; }
+    };
+    var rec = SHARE[kind + ':' + id];
+    if (rec && rec.url) { open(intro + '\nلعرض الملف وتنزيله:\n' + rec.url); return; }
+    toast('جارٍ تجهيز الفاتورة…');
+    var fallback = function (e) {
+      var bytes; try { bytes = rec && rec.bytes || makePdf(d.html); savePdfFile(bytes, d.ascii); } catch (x) {}
       var body = kind === 'payment' ? paymentText(S.view.payments[id]) : kind === 'sale' ? saleText(S.view.sales[id]) : 'السلام عليكم ' + (c.name || '') + '،\n\n' + statementText(c) + shopLine();
-      go(body);
-      toast((e.code === 'net' ? 'لا يوجد إنترنت' : 'تعذر رفع الملف') + '، فأُرسلت التفاصيل نصًا ونُزّل الملف على الجهاز.');
-    });
+      open(body);
+      toast((e && e.code === 'net' ? 'لا يوجد إنترنت' : 'تعذر رفع الملف') + '، فأُرسلت التفاصيل نصًا ونُزّل الملف على الجهاز.');
+    };
+    var started = Date.now(), p;
+    try { p = shareLink(kind, id); } catch (e) { toast('تعذر إنشاء ملف PDF: ' + e.message); return; }
+    p.then(function (url) {
+      var text = intro + '\nلعرض الملف وتنزيله:\n' + url;
+      // المتصفح يسمح بفتح واتساب خلال ثوانٍ من الضغط؛ إن تأخر الرفع يظهر زر واحد لفتح المحادثة
+      if (Date.now() - started < 4000) open(text);
+      else waReady(c.name, waUrl(phone, text));
+    }, fallback);
+  }
+  function waReady(name, url) {
+    var o = $('overlay'), box = o.querySelector('.sheet');
+    if (!box) { location.href = url; return; }
+    var old = box.querySelector('.wa-ready'); if (old) old.remove();
+    box.insertAdjacentHTML('afterbegin', '<a class="btn pay wide wa-ready" style="margin-bottom:10px" href="' + esc(url) + '" target="_blank" rel="noopener">الفاتورة جاهزة: افتح محادثة ' + esc(name || 'الزبون') + '</a>');
   }
   function sendPdfToCustomer(kind, id) {
     var d = pdfDoc(kind, id), bytes;
@@ -998,6 +1030,7 @@
     o.innerHTML = '<div class="sheet" role="dialog" aria-modal="true">' + fn(s) + '</div>';
     var first = o.querySelector('input:not([readonly]):not([type=checkbox])'); if (first && s.focus !== false) first.focus();
     itemPreview();
+    prefetchShare();
   }
   function closeBtn(label) { return '<button type="button" class="btn quiet" data-act="close-sheet">' + (label || 'إغلاق') + '</button>'; }
   function sheetInvoice(st) {
@@ -1166,7 +1199,7 @@
       var tg = s.telegram || {}, bk = s.backup || {};
       h += '<section class="section"><h2>المستخدمون والصلاحيات</h2><p class="hint">أضف البائعين وحدد ما يراه كل منهم.</p><div class="row" style="margin-top:8px"><a class="btn quiet small" href="#users">إدارة المستخدمين</a><button class="btn quiet small" data-act="copy-invite">نسخ رابط التطبيق للموظفين</button></div></section>';
       h += '<section class="section"><h2>استيراد الديون القديمة من Excel</h2><p class="hint">نزّل النموذج، واملأ فيه زبائنك وديونهم المتبقية، ثم ارفعه هنا. تظهر لك معاينة قبل الحفظ.</p><div class="row" style="margin-top:8px"><button class="btn quiet small" data-act="import-template">تنزيل نموذج Excel</button><label class="btn small" for="import-file" style="margin:0">رفع الملف المملوء</label><input type="file" id="import-file" accept=".xlsx,.csv" hidden></div></section>';
-      h += '<section class="section"><h2>بيانات المحل والفاتورة</h2><form id="f-settings" class="stack"><div><label for="s-shop">اسم المحل</label><input class="f" id="s-shop" maxlength="60" value="' + esc(s.shopName) + '"></div><div class="two"><div><label for="s-phone">هاتف المحل</label><input class="f" id="s-phone" dir="ltr" maxlength="30" value="' + esc(s.shopPhone) + '"></div><div><label for="s-cur">العملة</label><input class="f" id="s-cur" maxlength="12" value="' + esc(s.currency) + '"></div></div><div><label for="s-foot">نص أسفل الفاتورة</label><input class="f" id="s-foot" maxlength="120" value="' + esc(s.footer) + '"></div><div><label for="s-paper">عرض ورق الطابعة</label><select class="f" id="s-paper"><option value="80"' + (s.paper !== '58' && s.paper !== 'a4' ? ' selected' : '') + '>حرارية 80 ملم</option><option value="58"' + (s.paper === '58' ? ' selected' : '') + '>حرارية 58 ملم</option><option value="a4"' + (s.paper === 'a4' ? ' selected' : '') + '>عادية A4</option></select></div><div class="two"><div><label for="s-pct">نسبة زيادة القسط العامة %</label><input class="f" id="s-pct" inputmode="decimal" value="' + esc((s.installment || {}).pct || 0) + '"></div><div><label for="s-base">تُحسب على</label><select class="f" id="s-base"><option value="price"' + ((s.installment || {}).base !== 'profit' ? ' selected' : '') + '>سعر الجهاز</option><option value="profit"' + ((s.installment || {}).base === 'profit' ? ' selected' : '') + '>الربح</option></select></div></div><fieldset style="border:0;padding:0;margin:0"><legend style="font-weight:500;font-size:14.5px;padding:0;margin-bottom:4px">الخصم</legend><label class="check"><input type="checkbox" id="s-disc-on"' + (discRules().enabled ? ' checked' : '') + '>السماح بالخصم في الفواتير</label><div class="two"><div><label for="s-disc-max">أقصى خصم للموظف (مبلغ)</label><input class="f" id="s-disc-max" inputmode="numeric" value="' + esc(discRules().staffMax || '') + '"></div><div><label for="s-disc-pct">أو نسبة من الفاتورة %</label><input class="f" id="s-disc-pct" inputmode="decimal" value="' + esc(discRules().staffPct || '') + '"></div></div><p class="hint">اتركهما فارغين ليبقى الخصم لك وحدك. إلغاء الخصم يخفيه عن الجميع.</p></fieldset><div><label for="s-limit">أوقف تسجيل الموظف بعد كم ساعة بلا اتصال (0 بلا إيقاف)</label><input class="f" id="s-limit" inputmode="numeric" value="' + esc(s.offlineLimit) + '"></div><button class="btn primary">حفظ البيانات</button></form></section>';
+      h += '<section class="section"><h2>بيانات المحل والفاتورة</h2><form id="f-settings" class="stack"><div><label for="s-shop">اسم المحل</label><input class="f" id="s-shop" maxlength="60" value="' + esc(s.shopName) + '"></div><div class="two"><div><label for="s-phone">هاتف المحل</label><input class="f" id="s-phone" dir="ltr" maxlength="30" value="' + esc(s.shopPhone) + '"></div><div><label for="s-cur">العملة</label><input class="f" id="s-cur" maxlength="12" value="' + esc(s.currency) + '"></div></div><div><label for="s-foot">نص أسفل الفاتورة</label><input class="f" id="s-foot" maxlength="120" value="' + esc(s.footer) + '"></div><div><label for="s-paper">عرض ورق الطابعة</label><select class="f" id="s-paper"><option value="80"' + (s.paper !== '58' && s.paper !== 'a4' ? ' selected' : '') + '>حرارية 80 ملم</option><option value="58"' + (s.paper === '58' ? ' selected' : '') + '>حرارية 58 ملم</option><option value="a4"' + (s.paper === 'a4' ? ' selected' : '') + '>عادية A4</option></select></div><div class="two"><div><label for="s-pct">نسبة زيادة القسط العامة %</label><input class="f" id="s-pct" inputmode="decimal" value="' + esc((s.installment || {}).pct || 0) + '"></div><div><label for="s-base">تُحسب على</label><select class="f" id="s-base"><option value="price"' + ((s.installment || {}).base !== 'profit' ? ' selected' : '') + '>سعر الجهاز</option><option value="profit"' + ((s.installment || {}).base === 'profit' ? ' selected' : '') + '>الربح</option></select></div></div><fieldset style="border:0;padding:0;margin:0"><legend style="font-weight:500;font-size:14.5px;padding:0;margin-bottom:4px">الخصم</legend><label class="check"><input type="checkbox" id="s-disc-on"' + (discRules().enabled ? ' checked' : '') + '>السماح بالخصم في الفواتير</label><div class="two"><div><label for="s-disc-max">أقصى خصم للموظف (مبلغ)</label><input class="f" id="s-disc-max" inputmode="numeric" value="' + esc(discRules().staffMax || '') + '"></div><div><label for="s-disc-pct">أو نسبة من الفاتورة %</label><input class="f" id="s-disc-pct" inputmode="decimal" value="' + esc(discRules().staffPct || '') + '"></div></div><p class="hint">اتركهما فارغين ليبقى الخصم لك وحدك. إلغاء الخصم يخفيه عن الجميع.</p></fieldset><div><label for="s-limit">أوقف تسجيل الموظف بعد كم يوم بلا اتصال (0 بلا إيقاف)</label><input class="f" id="s-limit" inputmode="numeric" value="' + esc(Math.round((Number(s.offlineLimit) || 0) / 24 * 10) / 10) + '"></div><button class="btn primary">حفظ البيانات</button></form></section>';
       h += '<section class="section"><h2>إشعارات هاتفك على تيليجرام</h2>';
       if (tg.linked) h += '<p>تعمل على البوت <span class="num">@' + esc(tg.bot) + '</span>. يصلك فيها كل بيع وتسديد، وتقرير يومي الساعة 9 مساءً، وفي يوم 10 من كل شهر الساعة 10 صباحًا تقرير شهري شامل وقائمة المتأخرين مع رابط تذكير واتساب لكل زبون.</p><div class="row" style="margin-top:8px"><button class="btn quiet small" data-act="tg-test">إرسال رسالة تجربة</button></div>' + (s.failedNotices ? '<p class="notice" style="margin-top:8px">' + s.failedNotices + ' رسالة لم تصل.</p>' : '');
       else if (tg.hasToken) h += '<p>البوت المحفوظ: <span class="num">@' + esc(tg.bot) + '</span>. اضغط «فتح تيليجرام» ثم Start، ثم عد واضغط «تأكيد الربط».</p><div class="row" style="margin-top:8px"><a class="btn small" target="_blank" rel="noopener" href="' + esc(tg.link) + '">فتح تيليجرام</a><button class="btn quiet small" data-act="tg-check">تأكيد الربط</button></div><p class="hint" style="margin-top:8px">إذا لم يظهر زر Start: انسخ رمز الربط وأرسله إلى البوت كرسالة عادية، ثم اضغط «تأكيد الربط».</p><div class="row" style="margin-top:6px"><span class="num" dir="ltr" style="user-select:all">' + esc((tg.link || '').split('start=')[1] || '') + '</span><button class="btn quiet small" data-act="tg-copy">نسخ رمز الربط</button></div>';
@@ -1408,9 +1441,9 @@
       toast('حُفظت حركة المخزون.');
     },
     'f-settings': function () {
-      var pct = parseNum($('s-pct').value || '0'), lim = parseNum($('s-limit').value || '0');
+      var pct = parseNum($('s-pct').value || '0'), lim = parseNum($('s-limit').value || '0'); if (lim !== null) lim = Math.round(lim * 24);
       var dmax = parseAmount($('s-disc-max').value || '0'), dpct = parseNum($('s-disc-pct').value || '0');
-      if (pct === null || lim === null || dmax === null || dpct === null || dpct > 100) { toast('اكتب النسب والمبالغ وعدد الساعات بالأرقام، والنسبة لا تتجاوز 100.'); return; }
+      if (pct === null || lim === null || dmax === null || dpct === null || dpct > 100) { toast('اكتب النسب والمبالغ وعدد الأيام بالأرقام، والنسبة لا تتجاوز 100.'); return; }
       var next = { shopName: $('s-shop').value, shopPhone: $('s-phone').value, currency: $('s-cur').value, footer: $('s-foot').value, paper: $('s-paper').value, offlineLimit: lim, installment: { pct: pct, base: $('s-base').value }, discount: { enabled: $('s-disc-on').checked, staffMax: dmax, staffPct: dpct } };
       onlineAct(api('settings.save', { settings: next }), 'حُفظت البيانات.').catch(function () {});
     },
